@@ -18,6 +18,17 @@ public:
     auto enqueue(F&& f, Args&&... args) 
         -> std::future<typename std::result_of<F(Args...)>::type>;
     ~ThreadPool();
+
+    // wait for the completion of all tasks
+    // (meaning that all worker are waiting for new tasks)
+    void wait() const {
+        std::unique_lock<std::mutex> lock(work_done_mutex);
+
+        // wait until all threads are done and tasks are empty
+        while (!(active_worker == 0 && tasks.empty()))
+            work_done_condition.wait(lock);
+    }
+
 private:
     // need to keep track of threads so we can join them
     std::vector< std::thread > workers;
@@ -28,11 +39,17 @@ private:
     std::mutex queue_mutex;
     std::condition_variable condition;
     bool stop;
+
+    // waiting for completion
+    size_t active_worker;
+    mutable std::mutex work_done_mutex;
+    mutable std::condition_variable work_done_condition;
 };
  
 // the constructor just launches some amount of workers
 inline ThreadPool::ThreadPool(size_t threads)
-    :   stop(false)
+    :   stop(false),
+    active_worker(threads)
 {
     for(size_t i = 0;i<threads;++i)
         workers.emplace_back(
@@ -41,13 +58,23 @@ inline ThreadPool::ThreadPool(size_t threads)
                 for(;;)
                 {
                     std::unique_lock<std::mutex> lock(this->queue_mutex);
-                    while(!this->stop && this->tasks.empty())
-                        this->condition.wait(lock);
+
+                    --this->active_worker;
+                    
+                    while (!this->stop && this->tasks.empty()) {
+                        this->work_done_condition.notify_one(); // signal that this thread is done
+                        this->condition.wait(lock); // and wait for more tasks
+                    }
+
                     if(this->stop && this->tasks.empty())
                         return;
+
+                    ++this->active_worker;
+
                     std::function<void()> task(this->tasks.front());
                     this->tasks.pop();
                     lock.unlock();
+
                     task();
                 }
             }
@@ -59,7 +86,7 @@ template<class F, class... Args>
 auto ThreadPool::enqueue(F&& f, Args&&... args) 
     -> std::future<typename std::result_of<F(Args...)>::type>
 {
-    typedef typename std::result_of<F(Args...)>::type return_type;
+    using return_type = std::result_of<F(Args...)>::type;
     
     // don't allow enqueueing after stopping the pool
     if(stop)

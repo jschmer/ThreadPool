@@ -6,11 +6,10 @@
 
 int main()
 {
-    
     ThreadPool pool(4);
-    std::vector< std::future<int> > results;
+    std::vector<std::future<int>> results;
 
-    for(int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 8; ++i) {
         results.push_back(
             pool.enqueue([i] {
                 std::cout << "hello " << i << std::endl;
@@ -19,11 +18,14 @@ int main()
                 return i*i;
             })
         );
-    }   
-    
-    for(size_t i = 0;i<results.size();++i)
+    }
+
+    pool.wait();
+    std::cout << "Done waiting for all threads to finish every queued task." << std::endl;
+
+    for (size_t i = 0; i < results.size(); ++i)
         std::cout << results[i].get() << ' ';
     std::cout << std::endl;
-    
+
     return 0;
 }
