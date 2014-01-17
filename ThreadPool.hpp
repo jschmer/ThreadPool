@@ -10,11 +10,10 @@
 #include <future>
 #include <functional>
 #include <stdexcept>
-#include <atomic>
 
 class ThreadPool {
 public:
-    ThreadPool(size_t);
+    ThreadPool(size_t = std::thread::hardware_concurrency());
     ~ThreadPool();
 
     template<class F, class... Args>
@@ -34,7 +33,7 @@ private:
     // synchronization
     std::mutex queue_mutex;
     std::condition_variable condition;
-    std::atomic<bool> stop;
+    bool stop;
 
     // waiting for completion
     size_t active_worker;
@@ -43,9 +42,9 @@ private:
 };
 
 // the constructor just launches some amount of workers
-inline ThreadPool::ThreadPool(size_t threads = std::thread::hardware_concurrency())
-: stop(false),
-active_worker(threads)
+inline ThreadPool::ThreadPool(size_t threads)
+    : stop(false),
+    active_worker(threads)
 {
     for (size_t i = 0; i < threads; ++i) {
         workers.emplace_back(
@@ -82,7 +81,7 @@ template<class F, class... Args>
 auto ThreadPool::enqueue(F&& f, Args&&... args)
 -> std::future<typename std::result_of<F(Args...)>::type>
 {
-    using return_type = std::result_of<F(Args...)>::type;
+    using return_type = typename std::result_of<F(Args...)>::type;
 
     // don't allow enqueueing after stopping the pool
     if (stop)
@@ -112,7 +111,11 @@ inline void ThreadPool::wait() const {
 // the destructor joins all threads
 inline ThreadPool::~ThreadPool()
 {
-    stop = true;
+    {
+        std::unique_lock<std::mutex> lock(this->queue_mutex);
+        stop = true;
+    }
+
     condition.notify_all();
     for (size_t i = 0; i < workers.size(); ++i)
         workers[i].join();
