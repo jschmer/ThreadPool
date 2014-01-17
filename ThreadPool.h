@@ -10,13 +10,16 @@
 #include <future>
 #include <functional>
 #include <stdexcept>
+#include <atomic>
 
 class ThreadPool {
 public:
     ThreadPool(size_t);
-    template<class F, class... Args>
-    auto enqueue(F&& f, Args&&... args)->std::future<typename std::result_of<F(Args...)>::type>;
     ~ThreadPool();
+
+    template<class F, class... Args>
+    auto enqueue(F&& f, Args&&... args)
+        -> std::future<typename std::result_of<F(Args...)>::type>;
 
     // wait for the completion of all tasks
     // (meaning that all worker are waiting for new tasks)
@@ -31,7 +34,7 @@ private:
     // synchronization
     std::mutex queue_mutex;
     std::condition_variable condition;
-    bool stop;
+    std::atomic<bool> stop;
 
     // waiting for completion
     size_t active_worker;
@@ -44,34 +47,34 @@ inline ThreadPool::ThreadPool(size_t threads = std::thread::hardware_concurrency
 : stop(false),
 active_worker(threads)
 {
-    for (size_t i = 0; i < threads; ++i)
+    for (size_t i = 0; i < threads; ++i) {
         workers.emplace_back(
-        [this]
-    {
-        for (;;)
-        {
-            std::unique_lock<std::mutex> lock(this->queue_mutex);
+            [this] {
+                for (;;)
+                {
+                    std::unique_lock<std::mutex> lock(this->queue_mutex);
 
-            --this->active_worker;
+                    --this->active_worker;
 
-            while (!this->stop && this->tasks.empty()) {
-                this->work_done_condition.notify_one(); // signal that this thread is done
-                this->condition.wait(lock); // and wait for more tasks
+                    while (!this->stop && this->tasks.empty()) {
+                        this->work_done_condition.notify_one(); // signal that this thread is done
+                        this->condition.wait(lock); // and wait for more tasks
+                    }
+
+                    if (this->stop && this->tasks.empty())
+                        return;
+
+                    ++this->active_worker;
+
+                    std::function<void()> task(this->tasks.front());
+                    this->tasks.pop();
+                    lock.unlock();
+
+                    task();
+                }
             }
-
-            if (this->stop && this->tasks.empty())
-                return;
-
-            ++this->active_worker;
-
-            std::function<void()> task(this->tasks.front());
-            this->tasks.pop();
-            lock.unlock();
-
-            task();
-        }
+        );
     }
-    );
 }
 
 // add new work item to the pool
@@ -109,10 +112,7 @@ inline void ThreadPool::wait() const {
 // the destructor joins all threads
 inline ThreadPool::~ThreadPool()
 {
-    {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-        stop = true;
-    }
+    stop = true;
     condition.notify_all();
     for (size_t i = 0; i < workers.size(); ++i)
         workers[i].join();
