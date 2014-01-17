@@ -1,5 +1,5 @@
-#ifndef THREAD_POOL_H
-#define THREAD_POOL_H
+#ifndef THREAD_POOL_HPP
+#define THREAD_POOL_HPP
 
 #include <vector>
 #include <queue>
@@ -88,9 +88,9 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     if (stop)
         throw std::runtime_error("enqueue on stopped ThreadPool");
 
-    auto task = std::make_shared< std::packaged_task<return_type()> >(
+    auto task = std::make_shared<std::packaged_task<return_type()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-        );
+    );
 
     std::future<return_type> res = task->get_future();
     {
